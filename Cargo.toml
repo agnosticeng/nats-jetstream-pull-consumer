@@ -1,6 +1,6 @@
 [package]
 name = "nats-jetstream-pull-consumer"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.85"
 description = "A pull consumer for NATS JetStream with pluggable interceptors and error strategies"
@@ -22,3 +22,6 @@ serde = "1"
 tracing = "0.1"
 anyhow = "1"
 thiserror = "2"
+
+[dev-dependencies]
+cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }

@@ -151,6 +151,8 @@ impl Runner {
 
         let ack_extension_interval = Duration::from_millis(self.conf.ack_extension_interval_ms);
 
+        let chain = &self.chain;
+
         tokio::select! {
             _ = cancel.cancelled() => {}
             res = messages
@@ -159,6 +161,8 @@ impl Runner {
                     let handler = handler.clone();
                     let error_strategy = self.conf.error_strategy.clone();
                     async move {
+                        let mut msg = msg;
+                        chain.apply(&mut msg).await?;
                         let msg = Arc::new(msg);
 
                         let progress_cancel = CancellationToken::new();

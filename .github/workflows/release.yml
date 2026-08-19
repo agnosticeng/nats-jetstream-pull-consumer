@@ -2,27 +2,28 @@ name: Release
 
 on:
   push:
-    branches: [main]
-
-permissions:
-  contents: write
-  pull-requests: write
+    branches:
+      - main
 
 jobs:
-  release-plz:
-    name: Release-plz
+  release-plz-release:
+    name: Release-plz release
     runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'agnosticeng' }}
     permissions:
       contents: write
-      pull-requests: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
       - name: Run release-plz
-        uses: MarcoIeni/release-plz-action@v0.5
+        uses: release-plz/action@v0.5
         with:
-          project: .
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

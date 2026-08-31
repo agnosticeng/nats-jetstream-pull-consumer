@@ -4,7 +4,20 @@ use async_trait::async_trait;
 #[async_trait]
 pub trait BatchHandler: Send + Sync {
     fn name(&self) -> &str;
-    async fn process_batch(&self, msgs: Vec<Message>) -> Result<(), anyhow::Error>;
+
+    /// Process a batch of messages.
+    ///
+    /// The **outer** `Result` lets the handler early-return if the whole batch
+    /// aborts mid-processing (e.g. a downstream system is unavailable). In that
+    /// case the runner nacks every message and applies the configured
+    /// [`ErrorStrategy`](crate::ErrorStrategy).
+    ///
+    /// The **inner** `Vec` carries one outcome per message for partial-failure
+    /// handling: the runner acks successes (`Ok`) and nacks failures (`Err`).
+    async fn process_batch(
+        &self,
+        msgs: Vec<Message>,
+    ) -> Result<Vec<Result<(), anyhow::Error>>, anyhow::Error>;
 }
 
 #[async_trait]
@@ -38,8 +51,11 @@ mod tests {
         fn name(&self) -> &str {
             "test-batch"
         }
-        async fn process_batch(&self, _msgs: Vec<Message>) -> Result<(), anyhow::Error> {
-            Ok(())
+        async fn process_batch(
+            &self,
+            msgs: Vec<Message>,
+        ) -> Result<Vec<Result<(), anyhow::Error>>, anyhow::Error> {
+            Ok(msgs.into_iter().map(|_| Ok(())).collect())
         }
     }
 

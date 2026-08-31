@@ -3,7 +3,7 @@ use crate::error::{Error, Result};
 use crate::error_strategy::ErrorStrategy;
 use crate::handler::{BatchHandler, Handler, StreamHandler};
 use crate::interceptor::{Interceptor, InterceptorChain};
-use async_nats::jetstream::{AckKind, consumer::PullConsumer};
+use async_nats::jetstream::{AckKind, Message, consumer::PullConsumer};
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -92,6 +92,7 @@ impl Runner {
     ) -> Result<()> {
         let handler = Arc::new(handler);
         let flush_interval = Duration::from_millis(self.conf.flush_interval_ms);
+        let ack_extension_interval = Duration::from_millis(self.conf.ack_extension_interval_ms);
 
         loop {
             let msgs = tokio::select! {
@@ -116,12 +117,61 @@ impl Runner {
             let mut decoded = Vec::with_capacity(msgs.len());
             for mut msg in msgs {
                 self.chain.apply(&mut msg).await?;
-                decoded.push(msg);
+                decoded.push(Arc::new(msg));
             }
 
-            match handler.process_batch(decoded).await {
-                Ok(()) => {}
+            let progress_cancel = CancellationToken::new();
+            let progress_cancel_clone = progress_cancel.clone();
+            let decoded_for_progress = decoded.clone();
+
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = progress_cancel_clone.cancelled() => break,
+                        _ = tokio::time::sleep(ack_extension_interval) => {
+                            for msg in &decoded_for_progress {
+                                if let Err(e) = msg.ack_with(AckKind::Progress).await {
+                                    tracing::warn!("failed to send progress ack: {}", e);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            let batch_msgs: Vec<Message> = decoded.iter().map(|m| (**m).clone()).collect();
+            let results = handler.process_batch(batch_msgs).await;
+            progress_cancel.cancel();
+
+            match results {
+                Ok(results) => {
+                    for (msg, outcome) in decoded.iter().zip(results) {
+                        match outcome {
+                            Ok(()) => {
+                                if let Err(e) = msg.ack().await {
+                                    tracing::error!("failed to ack message: {}", e);
+                                }
+                            }
+                            Err(e) => {
+                                if let Err(e) = msg.ack_with(AckKind::Nak(None)).await {
+                                    tracing::error!("failed to nack message: {}", e);
+                                }
+                                if self.conf.error_strategy.process_error(e).is_err() {
+                                    return Err(Error::Stopped(
+                                        "handler error; error strategy is Stop".into(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
                 Err(e) => {
+                    for msg in &decoded {
+                        if let Err(e) = msg.ack_with(AckKind::Nak(None)).await {
+                            tracing::error!("failed to nack message: {}", e);
+                        }
+                    }
+
                     if self.conf.error_strategy.process_error(e).is_err() {
                         return Err(Error::Stopped(
                             "handler error; error strategy is Stop".into(),

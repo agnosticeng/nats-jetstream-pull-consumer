@@ -49,7 +49,16 @@ let runner = Runner::new(conf).with_interceptor(DecompressInterceptor::new());
 
 ### Batch handler
 
-Implement `BatchHandler` to receive batches of messages:
+Implement `BatchHandler` to process batches of messages against a downstream
+system (e.g. a batched write to ClickHouse). Batch mode is designed for
+**downstream batching** — many messages handled in a single downstream call —
+so prefer it when the downstream benefits from inserting many rows at once.
+
+`process_batch` returns one result **per message** so the runner can ack the
+successful ones and nack the failed ones. The **outer** `Result` lets you
+early-return if the whole batch aborts (e.g. the downstream is unavailable),
+in which case every message is nacked and the configured `ErrorStrategy`
+applies.
 
 ```rust
 use async_trait::async_trait;
@@ -63,14 +72,19 @@ impl BatchHandler for MyBatchHandler {
         "my-batch-handler"
     }
 
-    async fn process_batch(&self, msgs: Vec<async_nats::jetstream::Message>) -> Result<(), anyhow::Error> {
-        for msg in &msgs {
-            println!("received: {:?}", msg.message.payload.len());
-        }
-        Ok(())
+    async fn process_batch(
+        &self,
+        msgs: Vec<async_nats::jetstream::Message>,
+    ) -> Result<Vec<Result<(), anyhow::Error>>, anyhow::Error> {
+        // Insert all messages into the downstream system in one call.
+        insert_in_bulk(&msgs).await?;
+        Ok(msgs.iter().map(|_| Ok(())).collect())
     }
 }
 ```
+
+The runner automatically extends the ack timeout while the batch is being
+processed and acks/nacks each message afterwards.
 
 ### Stream handler
 
